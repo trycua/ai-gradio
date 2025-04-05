@@ -148,7 +148,8 @@ def get_provider_and_model(model_name: str, loop_provider: str) -> tuple:
     loop_provider_map = {
         "OPENAI": AgentLoop.OPENAI,
         "ANTHROPIC": AgentLoop.ANTHROPIC,
-        "OMNI": AgentLoop.OMNI
+        "OMNI": AgentLoop.OMNI,
+        "OMNI-OLLAMA": AgentLoop.OMNI  # Special case for Ollama models with OMNI parser
     }
     agent_loop = loop_provider_map.get(loop_provider, AgentLoop.OPENAI)
     
@@ -160,8 +161,12 @@ def get_provider_and_model(model_name: str, loop_provider: str) -> tuple:
         provider = LLMProvider.ANTHROPIC
         model_name_to_use = MODEL_MAPPINGS["anthropic"].get(model_name.lower(), MODEL_MAPPINGS["anthropic"]["default"])
     elif agent_loop == AgentLoop.OMNI:
-        # For OMNI, select provider based on model name
-        if "claude" in model_name.lower():
+        # For OMNI, select provider based on model name or loop_provider
+        if loop_provider == "OMNI-OLLAMA":
+            # For Ollama models, use OPENAI as provider but keep the original model name
+            provider = LLMProvider.OPENAI
+            model_name_to_use = model_name  # Use the Ollama model name directly
+        elif "claude" in model_name.lower():
             provider = LLMProvider.ANTHROPIC
             model_name_to_use = MODEL_MAPPINGS["omni"].get(model_name.lower(), MODEL_MAPPINGS["omni"]["default"])
         else:
@@ -399,6 +404,16 @@ def update_global_agent(provider, agent_loop, model_name, api_key, save_trajecto
     """
     global GLOBAL_AGENT
     
+    # For Ollama models, set environment variable to tell the agent to use Ollama
+    if ":" in model_name and agent_loop == AgentLoop.OMNI:
+        os.environ["CUA_USE_OLLAMA"] = "1"
+        os.environ["CUA_OLLAMA_MODEL"] = model_name
+        print(f"Using Ollama model: {model_name}")
+    else:
+        # For standard models, clear these variables
+        os.environ.pop("CUA_USE_OLLAMA", None)
+        os.environ.pop("CUA_OLLAMA_MODEL", None)
+    
     # Update the agent's parameters
     GLOBAL_AGENT.loop = agent_loop
     GLOBAL_AGENT.model = LLM(
@@ -603,6 +618,29 @@ def get_interface_args(pipeline):
     else:
         raise ValueError(f"Unsupported pipeline type: {pipeline}")
 
+def get_ollama_models():
+    """Get available models from Ollama if installed."""
+    try:
+        import subprocess
+        result = subprocess.run(['ollama', 'list'], capture_output=True, text=True)
+        if result.returncode == 0:
+            lines = result.stdout.strip().split('\n')
+            if len(lines) < 2:  # No models or just header
+                return []
+            
+            models = []
+            # Skip header line
+            for line in lines[1:]:
+                parts = line.split()
+                if parts:
+                    model_name = parts[0]
+                    models.append(f"OMNI: Ollama {model_name}")
+            return models
+        return []
+    except Exception as e:
+        print(f"Error getting Ollama models: {e}")
+        return []
+
 def create_advanced_demo():
     """
     Creates an advanced Gradio demo with model selection
@@ -735,6 +773,11 @@ def create_advanced_demo():
                         "OMNI: Claude 3.5 Sonnet (20240620)"
                     ]
                 
+                # Get Ollama models for OMNI
+                ollama_models = get_ollama_models()
+                if ollama_models:
+                    omni_models += ollama_models
+                
                 # Configuration options
                 agent_loop = gr.Dropdown(
                     choices=["OPENAI", "ANTHROPIC", "OMNI"],
@@ -818,10 +861,16 @@ def create_advanced_demo():
                             return "gpt-4o", loop_provider
                         elif "GPT-4.5" in choice:
                             return "gpt-4.5-preview", loop_provider
-                        elif "3.7" in choice:
+                        elif "Claude 3.7" in choice:
                             return "claude-3-7-sonnet-20250219", loop_provider
-                        else:
+                        elif "Claude 3.5" in choice:
                             return "claude-3-5-sonnet-20240620", loop_provider
+                        elif "Ollama" in choice:
+                            # For Ollama models, extract the model name after "OMNI: Ollama "
+                            model = choice.replace("OMNI: Ollama ", "")
+                            return model, "OMNI-OLLAMA"  # Special loop type for Ollama
+                        else:
+                            return "gpt-4o", loop_provider
                     else:
                         # Default
                         return "gpt-4-turbo", loop_provider

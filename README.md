@@ -234,10 +234,19 @@ load_dotenv()
 
 # Create a computer-use automation interface with OpenAI
 gr.load(
-    name='cua:gpt-4-turbo',  # Format: 'cua:model_name'
+    name='cua',  # No need to specify model in the name
     src=ai_gradio.registry,
     title='Computer-Use Agent',
     description='AI that can control a virtual macOS environment'
+).launch()
+
+# Advanced configuration with Claude
+demo = gr.load(
+    name='cua',  # Just use 'cua' for any model
+    src=ai_gradio.registry,
+    loop_provider="ANTHROPIC",      # Specify agent loop type
+    save_trajectory=True,           # Save agent actions for debugging
+    only_n_most_recent_images=5     # Number of screenshots to keep in context
 ).launch()
 ```
 
